@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TTU Block Board</title>
+<script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
+<script src="logic.js"></script>
+<script src="board.js"></script>
+<style>
+  :root { --ink: #1a1a1a; --ink-2: #595959; --ink-3: #9a9aa3; --line: #e7e7e7; --faint: #f7f7f7; --accent: #6631d7; --accent-soft: #f4f2fd;
+    --good: #067429; --warn: #9b4a08; --bad: #bd0a0a; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px 14px 24px; font: 13px/1.45 "Noto Sans", "Segoe UI", system-ui, sans-serif; color: var(--ink); background: #fff; }
+  h1 { font-size: 18px; margin: 0 0 2px; }
+  .sub { color: var(--ink-3); font-size: 12px; margin-bottom: 14px; }
+  .card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+  .card h2 { font-size: 11px; letter-spacing: .4px; text-transform: uppercase; color: var(--accent); margin: 0 0 8px; }
+  .hint { color: var(--ink-3); font-size: 12px; }
+  .title { font-weight: 700; font-size: 15px; }
+  .meta { color: var(--ink-2); font-size: 12px; margin-bottom: 8px; }
+  .fields { display: grid; gap: 6px; }
+  .fields label { display: grid; grid-template-columns: 60px 1fr 20px; align-items: center; gap: 8px; background: var(--faint); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; }
+  .fields label:focus-within { border-color: var(--accent); background: #fff; box-shadow: 0 0 0 3px var(--accent-soft); }
+  .fields span { font-size: 11.5px; color: var(--ink-2); font-weight: 600; }
+  .fields input { border: 0; background: transparent; font: 700 18px/1.3 inherit; color: var(--ink); width: 100%; outline: 0; padding: 2px 0; }
+  .fields input:disabled { color: var(--ink-3); }
+  .fields em { font-style: normal; color: var(--ink-3); font-size: 12px; }
+  .row { display: flex; align-items: center; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+  .toggle { display: flex; align-items: center; gap: 8px; font-size: 12.5px; margin-top: 10px; }
+  button { font: 600 12px inherit; border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 6px 10px; cursor: pointer; color: var(--ink); }
+  button:hover { border-color: var(--accent); color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .diff { font-size: 12px; margin-top: 8px; }
+  .bar { height: 6px; background: var(--faint); border-radius: 3px; overflow: hidden; margin: 3px 0 8px; }
+  .bar i { display: block; height: 100%; background: var(--accent); }
+  .big { font-size: 28px; font-weight: 700; color: var(--accent); line-height: 1.1; }
+  .issue { display: flex; gap: 6px; font-size: 12px; padding: 3px 0; border-bottom: 1px solid var(--faint); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; margin-top: 5px; flex: 0 0 auto; }
+  .lvl { font-size: 10px; font-weight: 700; background: var(--faint); border-radius: 4px; padding: 0 5px; color: var(--ink-2); flex: 0 0 auto; }
+</style>
+</head>
+<body>
+  <h1>Block board</h1>
+  <div class="sub">Pull a block's side: with Keep area on, the other side follows so its area holds.</div>
+
+  <div class="card" id="sel"></div>
+
+  <div class="card">
+    <h2>Floors</h2>
+    <div id="floors" class="hint">Reading the board…</div>
+    <div class="row"><button id="checkAll">Check all blocks</button><span class="hint" id="checkInfo"></span></div>
+  </div>
+
+  <div class="card">
+    <h2>Adjacency</h2>
+    <div id="adj" class="hint"></div>
+    <div class="row"><button id="loadReq">Load requests…</button><button id="refreshAdj">Score now</button></div>
+    <input type="file" id="reqFile" accept=".json,application/json" hidden>
+  </div>
+
+<script>
+"use strict";
+const T = window.TTU, B = window.TTUBoard;
+const $ = (id) => document.getElementById(id);
+const f2 = (v) => T.fmt(v, 2);
+let current = null; // { item, meta }
+
+// ── selected block ──
+async function showSelection() {
+  const sel = await miro.board.getSelection();
+  const item = sel.length === 1 && sel[0].type === "shape" ? sel[0] : null;
+  const meta = item ? await B.getMeta(item) : null;
+  if (!item || !meta) {
+    current = null;
+    $("sel").innerHTML = `<h2>Selected block</h2><div class="hint">Select one block to see and set its length, breadth and area.</div>`;
+    return;
+  }
+  const typing = document.activeElement && document.activeElement.closest && document.activeElement.closest("#sel .fields");
+  const same = current && current.item.id === item.id;
+  current = { item, meta };
+  const L = item.width / T.PX, Bd = item.height / T.PX, A = L * Bd, diff = A - meta.nsf;
+  if (!same || !$("szL")) {
+    $("sel").innerHTML = `<h2>Selected block</h2>
+      <div class="title">${meta.tag}${meta.name ? " · " + meta.name : ""}</div>
+      <div class="meta">Program area ${T.fmt(meta.nsf)} sf</div>
+      <div class="fields">
+        <label><span>Length</span><input id="szL" inputmode="decimal"><em>ft</em></label>
+        <label><span>Breadth</span><input id="szB" inputmode="decimal"><em>ft</em></label>
+        <label><span>Area</span><input id="szA" inputmode="decimal"><em>sf</em></label>
+      </div>
+      <label class="toggle"><input type="checkbox" id="keep"> Keep area (the other side follows)</label>
+      <div class="diff" id="diff"></div>
+      <div class="row"><button id="resetArea">Back to program area</button></div>`;
+  }
+  if (!typing) { $("szL").value = f2(L); $("szB").value = f2(Bd); $("szA").value = f2(A); }
+  $("keep").checked = !!meta.locked;
+  $("szA").disabled = !!meta.locked;
+  $("diff").innerHTML = Math.abs(diff) < 0.5 ? `<span style="color:var(--good)">Same area as the program.</span>`
+    : `<b style="color:${diff > 0 ? "var(--warn)" : "var(--accent)"}">${diff > 0 ? "+" : "−"}${T.fmt(Math.abs(diff))} sf</b> against the program.`;
+}
+
+async function typed(e) {
+  if (!current) return;
+  const k = { szL: "L", szB: "B", szA: "A" }[e.target.id]; if (!k) return;
+  const v = parseFloat(String(e.target.value).replace(/,/g, "")); if (!(v > 0)) return;
+  const { item, meta } = current;
+  const w0 = item.width, h0 = item.height;
+  let w = w0, h = h0;
+  if (k === "L") { w = v * T.PX; h = meta.locked ? (meta.nsf * T.PX * T.PX) / w : h0; }
+  if (k === "B") { h = v * T.PX; w = meta.locked ? (meta.nsf * T.PX * T.PX) / h : w0; }
+  if (k === "A") { const r = w0 / h0; w = Math.sqrt(v * T.PX * T.PX * r); h = (v * T.PX * T.PX) / w; }
+  current.meta = await B.apply(item, meta, w, h);
+  showSelection();
+}
+
+// ── floors and the adjacency score ──
+async function readBoard() {
+  const { floors } = await B.readFloors();
+  const rects = [], rows = [];
+  const req = await B.getRequests();
+  for (const fl of floors) {
+    let nsf = 0;
+    const plate = fl.plate;
+    const ox = plate ? plate.x - plate.width / 2 : 0, oy = plate ? plate.y - plate.height / 2 : 0;
+    for (const s of fl.kids) {
+      const quarter = Math.round(((s.rotation || 0) % 180 + 180) % 180) === 90;
+      const w = (quarter ? s.height : s.width) / T.PX, h = (quarter ? s.width : s.height) / T.PX;
+      const x = (s.x - (quarter ? s.height : s.width) / 2 - ox) / T.PX, y = (s.y - (quarter ? s.width : s.height) / 2 - oy) / T.PX;
+      const ctx = T.contextUnit(s.content);
+      if (ctx) { rects.push({ unit: ctx, floor: fl.frame.id, x, y, w, h, context: true }); continue; }
+      const p = T.parseBlock(s.content, s.width, s.height);
+      if (!p) continue;
+      nsf += w * h;
+      const unit = T.unitFor(p.no, req);
+      rects.push({ unit, floor: fl.frame.id, x, y, w, h });
+    }
+    const plateSf = plate ? (plate.width / T.PX) * (plate.height / T.PX) : 0;
+    rows.push(`<div style="display:flex;justify-content:space-between"><span>${fl.frame.title}</span><span class="hint">${T.fmt(nsf, 0)} nsf${plateSf ? ` · plate ${T.fmt(plateSf, 0)} sf` : ""}</span></div>
+      <div class="bar"><i style="width:${plateSf ? Math.min(100, (nsf / plateSf) * 100) : 0}%"></i></div>`);
+  }
+  $("floors").innerHTML = rows.join("") || "No frames titled “… floor” on this board.";
+  if (!req) { $("adj").innerHTML = "No requests loaded. In the adjacency tool use File → Save project, then load that file here. Everyone on this board then sees the same score."; return; }
+  const res = T.score(req, rects);
+  const name = (id) => (req.units.find((u) => u.id === id) || { name: id }).name;
+  const LV = { D: "Direct", I: "Ideal", L: "Low", X: "Apart" }, COL = { met: "var(--good)", partial: "#c99a06", unmet: "var(--warn)", conflict: "var(--bad)", open: "var(--ink-3)", far: "var(--ink-3)" };
+  const open = res.pairs.filter((p) => ["unmet", "partial", "conflict", "open"].includes(p.status) && p.level !== "L")
+    .sort((a, b) => (b.status === "conflict") - (a.status === "conflict"));
+  $("adj").innerHTML = `<div class="big">${res.score == null ? "–" : Math.round(res.score * 100) + "%"}</div>
+    <div class="hint">of weighted requests met (Direct ×3, Ideal ×2, Keep apart ×3)</div>
+    ${open.slice(0, 25).map((p) => `<div class="issue"><span class="dot" style="background:${COL[p.status]}"></span><span class="lvl">${LV[p.level]}</span><span>${name(p.a)} ↔ ${name(p.b)}${p.status === "open" ? " · not on a floor" : p.gap != null ? ` · ${Math.round(p.gap)}'` : ""}</span></div>`).join("")
+      || `<div class="hint" style="margin-top:6px">Every scored request is met.</div>`}`;
+}
+
+async function checkAll() {
+  $("checkInfo").textContent = "Checking…";
+  const shapes = await miro.board.get({ type: "shape" });
+  let blocks = 0, fixed = 0;
+  for (const s of shapes) {
+    const m = await B.getMeta(s); if (!m) continue;
+    blocks++;
+    // a block whose area drifted while the app was not running: keep its width, restore the area
+    const A = (s.width * s.height) / (T.PX * T.PX);
+    if (m.locked && Math.abs(A - m.nsf) >= 0.5) { await B.apply(s, m, s.width, (m.nsf * T.PX * T.PX) / s.width); fixed++; }
+    else if (await B.enforce(s)) fixed++;
+  }
+  $("checkInfo").textContent = `${blocks} blocks, ${fixed} fixed.`;
+  readBoard();
+}
+
+// ── wiring ──
+let typeTimer = 0;
+document.addEventListener("input", (e) => { clearTimeout(typeTimer); typeTimer = setTimeout(() => typed(e), 350); }); // apply after a short pause in typing
+document.addEventListener("change", async (e) => {
+  if (e.target.id === "keep" && current) {
+    current.meta = { ...current.meta, locked: e.target.checked };
+    await current.item.setMetadata(B.KEY, current.meta);
+    if (current.meta.locked) { // locking snaps the area back, keeping the length
+      const w = current.item.width; current.meta = await B.apply(current.item, current.meta, w, (current.meta.nsf * T.PX * T.PX) / w);
+    }
+    showSelection();
+  }
+  if (e.target.id === "reqFile" && e.target.files[0]) {
+    const text = await e.target.files[0].text();
+    try { await B.setRequests(T.requestsFromProject(JSON.parse(text))); await miro.board.notifications.showInfo("Adjacency requests loaded for this board"); }
+    catch (err) { await miro.board.notifications.showError("That file is not a project saved by the adjacency tool"); }
+    e.target.value = ""; readBoard();
+  }
+});
+document.addEventListener("click", async (e) => {
+  if (e.target.id === "resetArea" && current) { const w = current.item.width; current.meta = await B.apply(current.item, current.meta, w, (current.meta.nsf * T.PX * T.PX) / w); showSelection(); }
+  if (e.target.id === "checkAll") checkAll();
+  if (e.target.id === "loadReq") $("reqFile").click();
+  if (e.target.id === "refreshAdj") readBoard();
+});
+miro.board.ui.on("selection:update", () => showSelection());
+setInterval(() => { showSelection(); }, 1200);   // follows resizes made on the canvas
+setInterval(() => { readBoard(); }, 5000);       // floor totals and score stay current
+showSelection(); readBoard();
+</script>
+</body>
+</html>

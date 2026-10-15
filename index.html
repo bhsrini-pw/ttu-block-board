@@ -1,0 +1,17 @@
+<!doctype html>
+<!-- Miro loads this page in the background when a board opens (the app's "App URL").
+     It keeps block areas when people resize, and opens the side panel from the toolbar icon. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>TTU Block Board</title>
+<script src="https://miro.com/app/static/sdk/v2/miro.js"></script>
+<script src="logic.js"></script>
+<script src="board.js"></script>
+</head>
+<body>
+<script>
+  TTUBoard.startHeadless();
+</script>
+</body>
+</html>
